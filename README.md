@@ -1,112 +1,174 @@
-# IE7374 Lab Assignment 2 — FastAPI + Logging
+# IE7374 Lab Assignment 2: Wine Classifier API with FastAPI and Logging
 
-## Overview
+A REST API that serves a gradient boosting model trained on the Wine dataset. It
+answers with a predicted cultivar, and on request with the model's confidence and
+the full probability for every class. Every request, prediction and error is
+logged to the console and to a rotating log file, and the model is loaded once
+when the server starts rather than on every call.
 
-This project exposes a trained machine learning model as a REST API using
-FastAPI and uvicorn. It is based on the API_Labs/FastAPI_Labs template from
-the course repository and covers both lab activities for this week: Lab 1
-(FastAPI) and Lab 2 (Logging). The model is a GradientBoostingClassifier
-trained on the Wine dataset, served through three endpoints. Every request,
-prediction, and error is logged to both the console and a rotating log file
-using Python's built-in logging module.
+## At a Glance
+
+| What to check | Answer |
+|---|---|
+| Based on | API_Labs/FastAPI_Labs from the course repository |
+| Lab activities covered | Lab 1 FastAPI and Lab 2 Logging, combined in one project |
+| Core concept changed | The API itself: a new endpoint, a startup lifecycle that caches the model, structured error responses, and request logging. See [Changes Made to the Lab](#changes-made-to-the-lab) |
+| Advanced extension | Confidence scores and a full probability breakdown through /predict/detailed. See [Advanced Extension](#advanced-extension-confidence-scores-through-predictdetailed) |
+| Proof that it works | 7 automated API tests plus sample calls and log output. See [What a Successful Run Looks Like](#what-a-successful-run-looks-like) |
+| Run it yourself | Train, start the server, call it. See [Running the Code](#running-the-code) |
+
+## Endpoints
+
+| Method | Path | Returns | Error responses |
+|---|---|---|---|
+| GET | / | Health status, model name and the list of endpoints | None |
+| POST | /predict | Predicted class index and cultivar name | 422 invalid body, 503 no trained model |
+| POST | /predict/detailed | Class, name, confidence and the probability for each cultivar | 422 invalid body, 503 no trained model |
+
+Both prediction endpoints take the same body: the 13 chemical measurements of a
+wine, such as alcohol, flavanoids, color_intensity and proline.
+
+## How a Request Flows
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant M as Logging middleware
+    participant V as Pydantic validation
+    participant E as Endpoint
+    participant P as predict.py
+    participant K as Cached model
+
+    C->>M: POST /predict/detailed
+    M->>M: log Request started
+    M->>V: forward request
+    alt body is missing a field or has the wrong type
+        V-->>M: 422 and a warning in the log
+    else body is valid
+        V->>E: WineFeatures
+        E->>P: predict_proba_data(features)
+        P->>K: load_model()
+        K-->>P: model already in memory
+        P-->>E: probabilities
+        E-->>M: 200 with class, confidence and probabilities
+    end
+    M->>M: log Request finished with status and latency
+    M-->>C: response
+```
+
+The model reaches memory before the first request arrives. When the server
+starts, a lifespan hook calls load_model() once and the result is cached, so the
+cached model box above is always a memory lookup. If no model has been trained
+yet, the server still starts, logs a warning, and the prediction endpoints answer
+503 with a clear message until train.py has been run.
+
+## How Logging Is Wired
+
+```mermaid
+flowchart LR
+    A["main.py"] --> R["Root logger<br/>one shared config in logger.py"]
+    B["predict.py"] --> R
+    C["train.py"] --> R
+    D["data.py"] --> R
+    R --> H1["Console<br/>INFO and above"]
+    R --> H2["logs/app.log<br/>DEBUG and above<br/>rotates at 5 MB, keeps 3 backups"]
+```
+
+Every module asks logger.py for its logger, so all records share one format that
+names the module they came from. The console shows what an operator needs to
+follow the server live. The file keeps everything, including debug detail such
+as input shapes and raw probability arrays, for investigating a problem later.
 
 ## Changes Made to the Lab
 
-**Data (src/data.py)**
+| Area | Original FastAPI lab | This version |
+|---|---|---|
+| Dataset | Iris, 4 features | Wine, 13 chemical features, 3 cultivars |
+| Model | DecisionTreeClassifier, depth 3 | GradientBoostingClassifier, 100 trees |
+| Endpoints | GET / and POST /predict | Adds POST /predict/detailed with confidence scores |
+| Response | A bare integer | Class index plus cultivar name |
+| Model loading | Read from disk on every request | Loaded once at startup and kept in memory, first prediction 630.9 ms down to 4.3 ms |
+| Missing model | Generic 500 error | 503 with a message that says to run train.py |
+| Invalid input | Default FastAPI 422, not logged | 422 and a warning in the log naming the bad field |
+| Logging | None | Central config, request middleware, console plus rotating file |
+| Tests | None | 7 API tests with FastAPI's TestClient |
 
-The original lab used the Iris dataset, which has 150 samples, 4 features,
-and 3 classes. This was replaced with the Wine dataset, which has 178 samples,
-13 numeric chemical features, and 3 target classes representing wine cultivars
-grown in the same region in Italy. The train/test split ratio and random state
-were kept the same as the original (70/30, random_state=12) so the structural
-change is clearly visible by comparison.
+**Data and model**
 
-**Model (src/train.py)**
+The Iris dataset was replaced with the Wine dataset from scikit-learn: 178 wines,
+13 measurements each, from three cultivars grown in the same region of Italy. The
+70/30 split and random_state=12 from the original were kept so the comparison
+stays fair. The decision tree was replaced with a GradientBoostingClassifier with
+100 trees and a learning rate of 0.1, which reaches 94.4 percent accuracy on the
+held out wines.
 
-DecisionTreeClassifier(max_depth=3) was replaced with
-GradientBoostingClassifier(n_estimators=100, learning_rate=0.1). Gradient
-boosting is an ensemble method that trains trees sequentially, each one
-correcting the residual errors of the previous, producing a stronger learner
-than a single tree. The trained model is saved to model/wine_model.pkl.
+**Loading the model once**
 
-**Prediction (src/predict.py)**
+The original predict.py read the model file from disk on every call. That is
+fine for a demo, but under real traffic it repeats the same slow file read for
+every request. The loader is now cached, and a lifespan hook fills the cache when
+the server starts. A test sends five requests and checks that the file was read
+exactly once. Because a missing file raises an error that is not cached, the API
+picks up the model as soon as it is trained. To load a retrained model over an
+existing one, restart the server.
 
-The original predict.py only supported hard class predictions. A second
-function, predict_proba_data(), was added to return the full probability
-distribution across all three classes. This is needed to power the advanced
-endpoint described below.
+**Error handling**
 
-**API (src/main.py)**
+The original wrapped everything in a single except that returned 500 with the
+raw exception text. This version separates the cases a caller can act on. A body
+that fails validation returns 422 and is logged as a warning. A missing model
+returns 503, which tells the caller the service is not ready rather than broken.
+Anything unexpected returns 500 with a generic message, while the full traceback
+goes to the log file instead of to the caller.
 
-The original API had two endpoints: GET / and POST /predict. This version
-retains both and adds a third: POST /predict/detailed, which returns the
-predicted class, its name, the model's confidence in that prediction, and the
-complete probability breakdown across all three classes. The IrisData and
-IrisResponse models were replaced with WineFeatures (13 fields) and
-WineResponse. The health check response was enriched to include model name,
-dataset, and available endpoints.
+**Logging**
 
-**Logging (src/logger.py) — Lab 2**
+A central logger.py configures two handlers on the root logger, and every module
+uses it. An HTTP middleware logs each request when it starts and again when it
+finishes, with the status code and the time it took in milliseconds.
 
-The original lab had no logging. A central logger.py module was added with a
-shared logging configuration that applies to every file in the project.
-Logs are written simultaneously to the console at INFO level and to a rotating
-file handler at DEBUG level, capped at 5 MB per file with 3 backup files.
-Every module imports get_logger(__name__) from this file. An HTTP middleware
-in main.py logs the method, path, status code, and latency of every request.
-Validation errors and exceptions are caught and logged with appropriate levels
-before returning the HTTP error response.
-
-## Advanced Extension — Confidence Scores via /predict/detailed
+## Advanced Extension: Confidence Scores through /predict/detailed
 
 **Why this was chosen**
 
-A model that returns only a class label gives callers no way to know how
-certain the prediction is. In production ML systems, a prediction made with
-32% confidence and one made with 97% confidence are fundamentally different
-signals, but both look identical when the API returns just an integer. This
-matters especially in high-stakes domains like drug supply-chain management,
-where an uncertain prediction should trigger a human review rather than
-an automated action.
-
-Adding a dedicated endpoint for detailed predictions makes the uncertainty
-visible and actionable. Callers can branch on the confidence field: if it
-falls below a threshold they define on their side, they escalate to a human;
-if it is high, they proceed automatically. This pattern is widely used in
-production ML APIs and is a natural next step from a basic classifier endpoint.
+A model that only returns a class label hides how sure it is. A prediction made
+with 40 percent confidence and one made with 99 percent look identical when the
+API answers with a single integer, yet they call for very different actions. In
+high stakes settings, such as the drug supply chain work in my course project, an
+uncertain prediction should go to a person for review instead of triggering an
+automatic decision.
 
 **How it works**
 
-The /predict/detailed endpoint calls predict_proba() on the trained
-GradientBoostingClassifier, which returns a probability distribution across
-all three wine cultivar classes. The class with the highest probability is
-selected as the predicted class, and its probability is returned as the
-confidence score rounded to four decimal places. The full probability
-dictionary is included in the response keyed by class name rather than by
-index, so the caller does not need to know the internal class mapping.
-Every step is logged at INFO level.
+The endpoint calls predict_proba() on the model, which returns one probability
+per cultivar. The cultivar with the highest probability becomes the prediction,
+and that probability is returned as the confidence. The full breakdown is keyed
+by cultivar name rather than by index, so callers never need to know the internal
+class mapping. A test checks that the probabilities add up to one, that the
+confidence equals the largest probability, and that the named class is the one
+with that probability.
 
 **What it produces**
 
-A caller sending the same 13 chemical features to /predict gets back one
-integer. A caller sending the same features to /predict/detailed gets back
-the class index, the class name, a confidence score between 0 and 1, and
-a breakdown showing the model's probability estimate for each cultivar.
-This output is directly usable for building confidence thresholds,
-dashboards, or audit trails without any post-processing on the caller's side.
+| Field | Example | Meaning |
+|---|---|---|
+| predicted_class | 0 | Index of the most likely cultivar |
+| class_name | Barolo | Name of that cultivar |
+| confidence | 1.0 | Probability of the predicted cultivar |
+| probabilities | Barolo 1.0, Grignolino 0.0, Barbera 0.0 | Probability for every cultivar |
+
+A caller can set its own threshold on confidence and route anything below it to
+a human, with no extra work on the server side.
 
 ## Prerequisites
 
-The following must be available on your machine before running locally.
-
-Python 3.10 or later (developed and tested with Python 3.14). Download from
+Python 3.14, which is the version this project was tested with. Download from
 https://www.python.org/downloads and verify with: python3 --version
 
 Git. Download from https://git-scm.com and verify with: git --version
 
-Key Python packages and versions (all listed in requirements.txt):
-fastapi[all] 0.111.1, scikit-learn 1.5.1, joblib 1.4.2. These will be
-installed automatically by pip in the Environment Setup step.
+The Python packages are pinned in requirements.txt: fastapi[all] 0.111.1,
+scikit-learn 1.5.1 and joblib 1.4.2, plus pytest for the tests.
 
 ## Environment Setup
 
@@ -117,129 +179,164 @@ git clone https://github.com/lequo-neu/IE7374-FastAPI-Assignment2.git
 cd IE7374-FastAPI-Assignment2
 ```
 
-Create and activate a virtual environment.
+Create and activate a virtual environment, then install the dependencies.
 
 ```
 python3 -m venv venv
 source venv/bin/activate
-```
-
-Install all dependencies.
-
-```
 pip install -r requirements.txt
-```
-
-Verify the key packages installed correctly.
-
-```
-python -c "import fastapi, sklearn, joblib; print('All dependencies OK')"
 ```
 
 ## Running the Code
 
-Step 1: Move into the src/ folder. All scripts must be run from there so
-that relative paths to the model/ and logs/ directories resolve correctly.
+Run the API tests from the project root. They train a model into a temporary
+folder, so they work before train.py has ever been run.
+
+```
+pytest -v
+```
+
+Train the model. Run this from inside src/ so the model and log folders resolve
+correctly.
 
 ```
 cd src
-```
-
-Step 2: Train the model. This generates model/wine_model.pkl and writes
-training logs to both the console and logs/app.log.
-
-```
 python train.py
 ```
 
-Step 3: Start the API server.
+Start the server, still from inside src/.
 
 ```
 uvicorn main:app --reload
 ```
 
-Step 4: Open the interactive API documentation in a browser.
+Open http://127.0.0.1:8000/docs in a browser to try every endpoint from the
+interactive page, or call the API from a second terminal.
 
 ```
-http://127.0.0.1:8000/docs
+curl http://127.0.0.1:8000/
+curl -X POST http://127.0.0.1:8000/predict/detailed -H "Content-Type: application/json" -d '{"alcohol": 13.2, "malic_acid": 1.78, "ash": 2.14, "alcalinity_of_ash": 11.2, "magnesium": 100.0, "total_phenols": 2.65, "flavanoids": 2.76, "nonflavanoid_phenols": 0.26, "proanthocyanins": 1.28, "color_intensity": 4.38, "hue": 1.05, "od280_od315_of_diluted_wines": 3.4, "proline": 1050.0}'
+curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d '{"alcohol": 13.2}'
 ```
-
-From the docs page, expand any endpoint, click Try it out, fill in the
-request body, and click Execute to see the live response.
 
 ## What a Successful Run Looks Like
 
-After running train.py, the console output follows this pattern.
+| Check | Result |
+|---|---|
+| API tests | 7 passed |
+| Test accuracy after training | 0.9444 on 54 held out wines |
+| Model loading | Read from disk once, at startup |
+| First /predict/detailed call | 4.3 ms, down from 630.9 ms before the model was cached |
+| Invalid body | 422 listing every missing field, logged as a warning |
+
+The latency numbers were measured on a local laptop. They show the difference
+caching makes rather than a benchmark.
+
+**Tests**
 
 ```
-2026-10-09 15:09:35 [__main__] INFO: === Training pipeline started ===
-2026-10-09 15:09:35 [data] INFO: Loading Wine dataset (178 samples, 13 features, 3 classes).
-2026-10-09 15:09:35 [data] INFO: Train/test split complete. Train: 124 samples | Test: 54 samples.
-2026-10-09 15:09:35 [__main__] INFO: Training GradientBoostingClassifier (n_estimators=100, learning_rate=0.1, random_state=12).
-2026-10-09 15:09:35 [__main__] INFO: Model training complete.
-2026-10-09 15:09:35 [__main__] INFO: Test accuracy: 0.9444
-2026-10-09 15:09:35 [__main__] INFO: Model saved to ../model/wine_model.pkl
-2026-10-09 15:09:35 [__main__] INFO: === Training pipeline complete ===
+test/test_api.py::test_health_lists_the_endpoints PASSED
+test/test_api.py::test_predict_returns_class_and_name PASSED
+test/test_api.py::test_detailed_probabilities_are_consistent PASSED
+test/test_api.py::test_missing_field_returns_422_and_is_logged PASSED
+test/test_api.py::test_missing_model_returns_503 PASSED
+test/test_api.py::test_middleware_logs_status_and_latency PASSED
+test/test_api.py::test_model_is_loaded_once_for_many_requests PASSED
+
+7 passed in 0.66s
 ```
 
-After starting the server, uvicorn confirms it is watching for changes and
-ready to receive requests.
+**Training**
+
+```
+[__main__] INFO: === Training pipeline started ===
+[data] INFO: Loading Wine dataset (178 samples, 13 features, 3 classes).
+[data] INFO: Train/test split complete. Train: 124 samples | Test: 54 samples.
+[__main__] INFO: Training GradientBoostingClassifier (n_estimators=100, learning_rate=0.1, random_state=12).
+[__main__] INFO: Model training complete.
+[__main__] INFO: Test accuracy: 0.9444
+[__main__] INFO: Model saved to ../model/wine_model.pkl
+[__main__] INFO: === Training pipeline complete ===
+```
+
+**Server startup**
+
+The model is in memory before the server reports that it is ready.
 
 ```
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process using WatchFiles
-INFO:     Started server process
+INFO:     Waiting for application startup.
+[predict] INFO: Model loaded from ../model/wine_model.pkl
+[main] INFO: Model loaded and cached at startup.
 INFO:     Application startup complete.
 ```
 
-After calling POST /predict/detailed with the sample Wine feature values,
-the response looks like this. A confidence of 1.0 indicates the model is
-extremely certain about this particular sample, which is expected for a
-well-separated point in the Wine dataset.
+**Responses**
+
+The health check:
 
 ```json
-{
-  "predicted_class": 0,
-  "class_name": "Barolo",
-  "confidence": 1,
-  "probabilities": {
-    "Barolo": 1,
-    "Grignolino": 0,
-    "Barbera": 0
-  }
-}
+{"status": "healthy", "model": "GradientBoostingClassifier", "dataset": "Wine (sklearn)", "endpoints": ["/predict", "/predict/detailed"]}
 ```
 
-Each API call simultaneously produces console log entries and writes to
-logs/app.log. The first call takes slightly longer because the model is
-loaded from disk.
+A detailed prediction for the sample Barolo:
 
-```
-2026-10-09 15:10:29 [main] INFO: → POST /predict/detailed
-2026-10-09 15:10:29 [main] INFO: POST /predict/detailed called.
-2026-10-09 15:10:30 [main] INFO: Detailed prediction: 0 (Barolo) confidence=1.0000
-2026-10-09 15:10:30 [main] INFO: ← POST /predict/detailed | 200 | 630.9ms
+```json
+{"predicted_class": 0, "class_name": "Barolo", "confidence": 1.0, "probabilities": {"Barolo": 1.0, "Grignolino": 0.0, "Barbera": 0.0}}
 ```
 
-The logs/app.log file captures every event at DEBUG level and above, including
-the full request history across all sessions, making it possible to audit
-every prediction the API has ever returned.
+A body with only one field, which returns 422 and names each missing field.
+The first two of the twelve entries are shown here.
+
+```json
+{"detail": [{"type": "missing", "loc": ["body", "malic_acid"], "msg": "Field required", "input": {"alcohol": 13.2}}, {"type": "missing", "loc": ["body", "ash"], "msg": "Field required", "input": {"alcohol": 13.2}}]}
+```
+
+**Log file**
+
+The same three calls as recorded in logs/app.log. Each request is bracketed by a
+started and a finished line, and the file also keeps the debug detail that the
+console leaves out. The raw probabilities show why the confidence rounds to 1.0:
+the model gives Barolo 0.999999.
+
+```
+[main] INFO: Request started: GET /
+[main] DEBUG: Health check endpoint called.
+[main] INFO: Request finished: GET /, status 200, 0.7 ms
+[main] INFO: Request started: POST /predict/detailed
+[main] INFO: POST /predict/detailed called.
+[predict] DEBUG: predict_proba_data called. Input shape: (1, 13)
+[predict] INFO: Probability scores: [[0.999998688555131, 7.768319025887161e-07, 5.346129664186703e-07]]
+[main] INFO: Detailed prediction: 0 (Barolo) confidence=1.0000
+[main] INFO: Request finished: POST /predict/detailed, status 200, 4.3 ms
+[main] INFO: Request started: POST /predict
+[main] WARNING: Validation error on /predict: [{'type': 'missing', 'loc': ('body', 'malic_acid'), ...}]
+[main] INFO: Request finished: POST /predict, status 422, 0.9 ms
+```
+
+Timestamps were removed from these excerpts to keep the lines short. Every line
+in the real file starts with the date and time.
 
 ## Project Structure
 
 ```
 IE7374-FastAPI-Assignment2/
     logs/
+        app.log                 (created on first run)
     model/
-        wine_model.pkl          (generated after running train.py)
+        wine_model.pkl          (created by train.py)
     src/
         __init__.py
-        logger.py               (Lab 2: central logging configuration)
-        data.py                 (modified: Wine dataset instead of Iris)
-        train.py                (modified: GradientBoostingClassifier instead of DecisionTree)
-        predict.py              (extended: added predict_proba_data function)
-        main.py                 (Lab 1 + Lab 2: FastAPI app with logging middleware)
+        logger.py               (central logging configuration)
+        data.py                 (Wine dataset and split)
+        train.py                (GradientBoostingClassifier training)
+        predict.py              (cached model loading and prediction)
+        main.py                 (FastAPI app, lifespan, middleware, endpoints)
+    test/
+        conftest.py             (trains a model into a temporary folder)
+        test_api.py             (7 API tests)
+    pytest.ini
+    requirements.txt
     .gitignore
     README.md
-    requirements.txt
 ```
