@@ -171,13 +171,14 @@ request body, and click Execute to see the live response.
 After running train.py, the console output follows this pattern.
 
 ```
-2026-10-09 [__main__] INFO: === Training pipeline started ===
-2026-10-09 [data]     INFO: Loading Wine dataset (178 samples, 13 features, 3 classes).
-2026-10-09 [data]     INFO: Train/test split complete. Train: 124 | Test: 54.
-2026-10-09 [__main__] INFO: Training GradientBoostingClassifier...
-2026-10-09 [__main__] INFO: Test accuracy: 0.9815
-2026-10-09 [__main__] INFO: Model saved to ../model/wine_model.pkl
-2026-10-09 [__main__] INFO: === Training pipeline complete ===
+2026-10-09 14:58:06 [__main__] INFO: === Training pipeline started ===
+2026-10-09 14:58:06 [data] INFO: Loading Wine dataset (178 samples, 13 features, 3 classes).
+2026-10-09 14:58:06 [data] INFO: Train/test split complete. Train: 124 samples | Test: 54 samples.
+2026-10-09 14:58:06 [__main__] INFO: Training GradientBoostingClassifier (n_estimators=100, learning_rate=0.1, random_state=12).
+2026-10-09 14:58:06 [__main__] INFO: Model training complete.
+2026-10-09 14:58:06 [__main__] INFO: Test accuracy: 0.9444
+2026-10-09 14:58:06 [__main__] INFO: Model saved to ....../model/wine_model.pkl
+2026-10-09 14:58:06 [__main__] INFO: === Training pipeline complete ===
 ```
 
 After starting the server and calling POST /predict/detailed with valid
