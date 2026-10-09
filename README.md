@@ -43,7 +43,7 @@ retains both and adds a third: POST /predict/detailed, which returns the
 predicted class, its name, the model's confidence in that prediction, and the
 complete probability breakdown across all three classes. The IrisData and
 IrisResponse models were replaced with WineFeatures (13 fields) and
-WineResponse. A health check response was enriched to include model name,
+WineResponse. The health check response was enriched to include model name,
 dataset, and available endpoints.
 
 **Logging (src/logger.py) — Lab 2**
@@ -71,9 +71,9 @@ an automated action.
 
 Adding a dedicated endpoint for detailed predictions makes the uncertainty
 visible and actionable. Callers can branch on the confidence field: if it
-is below a threshold they set on their side, they escalate to a human; if it
-is high, they proceed automatically. This pattern is widely used in production
-ML APIs and is a natural next step from a basic classifier endpoint.
+falls below a threshold they define on their side, they escalate to a human;
+if it is high, they proceed automatically. This pattern is widely used in
+production ML APIs and is a natural next step from a basic classifier endpoint.
 
 **How it works**
 
@@ -81,9 +81,9 @@ The /predict/detailed endpoint calls predict_proba() on the trained
 GradientBoostingClassifier, which returns a probability distribution across
 all three wine cultivar classes. The class with the highest probability is
 selected as the predicted class, and its probability is returned as the
-confidence score. The full probability dictionary is also included in the
-response, keyed by class name rather than by index, so the caller does not
-need to know the class mapping. Every step is logged at INFO level.
+confidence score. The full probability dictionary is included in the response
+keyed by class name rather than by index, so the caller does not need to know
+the internal class mapping. Every step is logged at INFO level.
 
 **What it produces**
 
@@ -96,10 +96,16 @@ dashboards, or audit trails without any post-processing on the caller's side.
 
 ## Prerequisites
 
-Python 3.10 or later. Download from https://www.python.org/downloads and
-verify with: python3 --version
+The following must be available on your machine before running locally.
+
+Python 3.10 or later (developed and tested with Python 3.14). Download from
+https://www.python.org/downloads and verify with: python3 --version
 
 Git. Download from https://git-scm.com and verify with: git --version
+
+Key Python packages and versions (all listed in requirements.txt):
+fastapi[all] 0.111.1, scikit-learn 1.5.1, joblib 1.4.2. These will be
+installed automatically by pip in the Environment Setup step.
 
 ## Environment Setup
 
@@ -123,33 +129,46 @@ Install all dependencies.
 pip install -r requirements.txt
 ```
 
+Verify the key packages installed correctly.
+
+```
+python -c "import fastapi, sklearn, joblib; print('All dependencies OK')"
+```
+
 ## Running the Code
 
-Step 1: Train the model. Run this from inside the src/ folder.
+Step 1: Move into the src/ folder. All scripts must be run from there so
+that relative paths to the model/ and logs/ directories resolve correctly.
 
 ```
 cd src
+```
+
+Step 2: Train the model. This generates model/wine_model.pkl and writes
+training logs to both the console and logs/app.log.
+
+```
 python train.py
 ```
 
-The trained model is saved to model/wine_model.pkl. Training logs appear on
-the console and are written to logs/app.log.
-
-Step 2: Start the API server. Run this from inside the src/ folder.
+Step 3: Start the API server.
 
 ```
 uvicorn main:app --reload
 ```
 
-Step 3: Open the interactive docs in a browser.
+Step 4: Open the interactive API documentation in a browser.
 
 ```
 http://127.0.0.1:8000/docs
 ```
 
+From the docs page, expand any endpoint, click Try it out, fill in the
+request body, and click Execute to see the live response.
+
 ## What a Successful Run Looks Like
 
-After running train.py, the terminal output follows this pattern.
+After running train.py, the console output follows this pattern.
 
 ```
 2026-10-09 [__main__] INFO: === Training pipeline started ===
@@ -161,8 +180,8 @@ After running train.py, the terminal output follows this pattern.
 2026-10-09 [__main__] INFO: === Training pipeline complete ===
 ```
 
-After starting the API and calling /predict/detailed, the response looks
-like this.
+After starting the server and calling POST /predict/detailed with valid
+Wine feature values, the response looks like this.
 
 ```json
 {
@@ -177,8 +196,8 @@ like this.
 }
 ```
 
-Each API call also produces a log entry showing the method, path, status
-code, and latency.
+Each API call simultaneously produces a console log entry and writes to
+logs/app.log.
 
 ```
 2026-10-09 [main] INFO: → POST /predict/detailed
@@ -186,23 +205,20 @@ code, and latency.
 2026-10-09 [main] INFO: ← POST /predict/detailed | 200 | 4.2ms
 ```
 
-The file logs/app.log captures every log event at DEBUG level and above,
-making it possible to inspect the full request history after the fact.
-
 ## Project Structure
 
 ```
 IE7374-FastAPI-Assignment2/
     logs/
     model/
-        wine_model.pkl      (generated after running train.py)
+        wine_model.pkl          (generated after running train.py)
     src/
         __init__.py
-        logger.py           (Lab 2 - central logging config)
-        data.py             (modified: Wine dataset)
-        train.py            (modified: GradientBoostingClassifier)
-        predict.py          (extended: added predict_proba support)
-        main.py             (Lab 1 + Lab 2 - FastAPI app with logging middleware)
+        logger.py               (Lab 2: central logging configuration)
+        data.py                 (modified: Wine dataset instead of Iris)
+        train.py                (modified: GradientBoostingClassifier instead of DecisionTree)
+        predict.py              (extended: added predict_proba_data function)
+        main.py                 (Lab 1 + Lab 2: FastAPI app with logging middleware)
     .gitignore
     README.md
     requirements.txt
