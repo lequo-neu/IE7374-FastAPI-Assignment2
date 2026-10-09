@@ -81,9 +81,10 @@ The /predict/detailed endpoint calls predict_proba() on the trained
 GradientBoostingClassifier, which returns a probability distribution across
 all three wine cultivar classes. The class with the highest probability is
 selected as the predicted class, and its probability is returned as the
-confidence score. The full probability dictionary is included in the response
-keyed by class name rather than by index, so the caller does not need to know
-the internal class mapping. Every step is logged at INFO level.
+confidence score rounded to four decimal places. The full probability
+dictionary is included in the response keyed by class name rather than by
+index, so the caller does not need to know the internal class mapping.
+Every step is logged at INFO level.
 
 **What it produces**
 
@@ -171,40 +172,58 @@ request body, and click Execute to see the live response.
 After running train.py, the console output follows this pattern.
 
 ```
-2026-10-09 14:58:06 [__main__] INFO: === Training pipeline started ===
-2026-10-09 14:58:06 [data] INFO: Loading Wine dataset (178 samples, 13 features, 3 classes).
-2026-10-09 14:58:06 [data] INFO: Train/test split complete. Train: 124 samples | Test: 54 samples.
-2026-10-09 14:58:06 [__main__] INFO: Training GradientBoostingClassifier (n_estimators=100, learning_rate=0.1, random_state=12).
-2026-10-09 14:58:06 [__main__] INFO: Model training complete.
-2026-10-09 14:58:06 [__main__] INFO: Test accuracy: 0.9444
-2026-10-09 14:58:06 [__main__] INFO: Model saved to ....../model/wine_model.pkl
-2026-10-09 14:58:06 [__main__] INFO: === Training pipeline complete ===
+2026-10-09 15:09:35 [__main__] INFO: === Training pipeline started ===
+2026-10-09 15:09:35 [data] INFO: Loading Wine dataset (178 samples, 13 features, 3 classes).
+2026-10-09 15:09:35 [data] INFO: Train/test split complete. Train: 124 samples | Test: 54 samples.
+2026-10-09 15:09:35 [__main__] INFO: Training GradientBoostingClassifier (n_estimators=100, learning_rate=0.1, random_state=12).
+2026-10-09 15:09:35 [__main__] INFO: Model training complete.
+2026-10-09 15:09:35 [__main__] INFO: Test accuracy: 0.9444
+2026-10-09 15:09:35 [__main__] INFO: Model saved to ../model/wine_model.pkl
+2026-10-09 15:09:35 [__main__] INFO: === Training pipeline complete ===
 ```
 
-After starting the server and calling POST /predict/detailed with valid
-Wine feature values, the response looks like this.
+After starting the server, uvicorn confirms it is watching for changes and
+ready to receive requests.
+
+```
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process using WatchFiles
+INFO:     Started server process
+INFO:     Application startup complete.
+```
+
+After calling POST /predict/detailed with the sample Wine feature values,
+the response looks like this. A confidence of 1.0 indicates the model is
+extremely certain about this particular sample, which is expected for a
+well-separated point in the Wine dataset.
 
 ```json
 {
   "predicted_class": 0,
   "class_name": "Barolo",
-  "confidence": 0.9823,
+  "confidence": 1,
   "probabilities": {
-    "Barolo": 0.9823,
-    "Grignolino": 0.0141,
-    "Barbera": 0.0036
+    "Barolo": 1,
+    "Grignolino": 0,
+    "Barbera": 0
   }
 }
 ```
 
-Each API call simultaneously produces a console log entry and writes to
-logs/app.log.
+Each API call simultaneously produces console log entries and writes to
+logs/app.log. The first call takes slightly longer because the model is
+loaded from disk.
 
 ```
-2026-10-09 [main] INFO: → POST /predict/detailed
-2026-10-09 [predict] INFO: Detailed prediction: 0 (Barolo) confidence=0.9823
-2026-10-09 [main] INFO: ← POST /predict/detailed | 200 | 4.2ms
+2026-10-09 15:10:29 [main] INFO: → POST /predict/detailed
+2026-10-09 15:10:29 [main] INFO: POST /predict/detailed called.
+2026-10-09 15:10:30 [main] INFO: Detailed prediction: 0 (Barolo) confidence=1.0000
+2026-10-09 15:10:30 [main] INFO: ← POST /predict/detailed | 200 | 630.9ms
 ```
+
+The logs/app.log file captures every event at DEBUG level and above, including
+the full request history across all sessions, making it possible to audit
+every prediction the API has ever returned.
 
 ## Project Structure
 
